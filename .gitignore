@@ -2,3 +2,5 @@
 venv/
 
 workspace/
+
+__pycache__/
