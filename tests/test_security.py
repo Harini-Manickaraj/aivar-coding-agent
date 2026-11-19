@@ -56,6 +56,38 @@ class TestSecurityAndCheckpoints(unittest.TestCase):
         self.assertIn("Rolled back workspace", undo_res)
         self.assertIn("return a - b", read_file("calc.py"))
 
+    def test_corrupt_empty_git_dir_never_touches_parent_repo(self):
+        import subprocess
+        parent_dir = WORKSPACE_DIR.parent
+        parent_head_before = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(parent_dir), capture_output=True, text=True
+        ).stdout.strip()
+
+        # Simulate Windows partial-cleanup bug: an empty workspace/.git folder
+        (WORKSPACE_DIR / ".git").mkdir(parents=True, exist_ok=True)
+
+        write_file("isolated.py", "x = 1\n")
+        undo_res = undo_last_checkpoint()
+        self.assertIn("Rolled back workspace", undo_res)
+        self.assertFalse((WORKSPACE_DIR / "isolated.py").exists())
+
+        parent_head_after = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(parent_dir), capture_output=True, text=True
+        ).stdout.strip()
+        self.assertEqual(parent_head_before, parent_head_after)
+
+    def test_consecutive_edits_undo_one_step_at_a_time(self):
+        write_file("steps.txt", "v1\n")
+        edit_file("steps.txt", "v1", "v2")
+        edit_file("steps.txt", "v2", "v3")
+        self.assertEqual(read_file("steps.txt").replace("\r\n", "\n"), "v3\n")
+
+        undo_last_checkpoint()
+        self.assertEqual(read_file("steps.txt").replace("\r\n", "\n"), "v2\n")
+
+        undo_last_checkpoint()
+        self.assertEqual(read_file("steps.txt").replace("\r\n", "\n"), "v1\n")
+
     def test_trim_history_preserves_user_boundary(self):
         msgs = [types.Content(role="user", parts=[types.Part.from_text(text="initial task")])]
         for i in range(25):

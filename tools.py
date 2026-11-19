@@ -1,6 +1,8 @@
 ﻿import difflib
 import os
 import re
+import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -53,52 +55,78 @@ def _safe_path(file_path: str) -> Path:
     return resolved_target
 
 
-def _ensure_workspace_git() -> None:
-    """Initializes a local Git repository inside workspace/ for automatic checkpoints."""
+def _rm_readonly(func, path, _):
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _git(*args: str) -> subprocess.CompletedProcess:
+    """Runs git pinned strictly to workspace/.git so it can never walk up to the parent repo."""
     git_dir = WORKSPACE_DIR / ".git"
-    if not git_dir.exists():
-        subprocess.run(["git", "init"], cwd=str(WORKSPACE_DIR), capture_output=True, text=True)
-        subprocess.run(["git", "config", "user.email", "agent@aivar.local"], cwd=str(WORKSPACE_DIR), capture_output=True)
-        subprocess.run(["git", "config", "user.name", "AIVAR Agent"], cwd=str(WORKSPACE_DIR), capture_output=True)
-        subprocess.run(["git", "add", "-A"], cwd=str(WORKSPACE_DIR), capture_output=True)
-        subprocess.run(
-            ["git", "commit", "-m", "checkpoint: initial workspace", "--allow-empty"],
-            cwd=str(WORKSPACE_DIR),
-            capture_output=True,
-        )
+    env = {
+        **os.environ,
+        "GIT_DIR": str(git_dir),
+        "GIT_WORK_TREE": str(WORKSPACE_DIR),
+    }
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(WORKSPACE_DIR),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _ensure_workspace_git() -> None:
+    """Initializes or repairs a local Git repository inside workspace/ for automatic checkpoints."""
+    git_dir = WORKSPACE_DIR / ".git"
+    if git_dir.exists():
+        probe = _git("rev-parse", "--is-inside-work-tree")
+        if probe.returncode == 0 and probe.stdout.strip() == "true":
+            return
+        # Broken or empty .git directory left behind by partial cleanup -> wipe and re-init
+        if git_dir.is_dir():
+            shutil.rmtree(git_dir, onerror=_rm_readonly)
+        else:
+            git_dir.unlink()
+
+    _git("init")
+    _git("config", "user.email", "agent@aivar.local")
+    _git("config", "user.name", "AIVAR Agent")
+    _git("config", "core.autocrlf", "false")
+    _git("add", "-A")
+    _git("commit", "-m", "checkpoint: initial workspace", "--allow-empty")
 
 
 def checkpoint_workspace(label: str) -> None:
-    """Commits current workspace state before a mutating file operation."""
+    """Commits a workspace snapshot pinned strictly to workspace/.git."""
     _ensure_workspace_git()
-    subprocess.run(["git", "add", "-A"], cwd=str(WORKSPACE_DIR), capture_output=True)
-    status = subprocess.run(["git", "status", "--porcelain"], cwd=str(WORKSPACE_DIR), capture_output=True, text=True)
-    if status.stdout.strip():
-        subprocess.run(
-            ["git", "commit", "-m", f"checkpoint: {label}"],
-            cwd=str(WORKSPACE_DIR),
-            capture_output=True,
-        )
+    _git("add", "-A")
+    # Always commit (even if empty on 'before') so every mutation has a 1:1 before/after pair
+    _git("commit", "-m", f"checkpoint: {label}", "--allow-empty")
 
 
 def undo_last_checkpoint() -> str:
-    """Rolls back the workspace to the snapshot taken before the most recent file edit."""
+    """Rolls back the workspace to the 'before' snapshot of the most recent file edit."""
     git_dir = WORKSPACE_DIR / ".git"
     if not git_dir.exists():
         return "Nothing to undo: no checkpoints exist yet."
 
-    log = subprocess.run(
-        ["git", "log", "-n", "2", "--pretty=format:%h %s"],
-        cwd=str(WORKSPACE_DIR),
-        capture_output=True,
-        text=True,
-    )
+    probe = _git("rev-parse", "--is-inside-work-tree")
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        return "Nothing to undo: workspace checkpoint repository is uninitialized."
+
+    head_msg = _git("log", "-1", "--pretty=format:%s").stdout.strip()
+    if not head_msg.startswith("checkpoint: after"):
+        return "Nothing to undo: no completed agent file edit at HEAD."
+
+    log = _git("log", "-n", "2", "--pretty=format:%h %s")
     commits = [line for line in log.stdout.splitlines() if line.strip()]
     if len(commits) < 2:
         return "Nothing to undo: already at initial workspace state."
 
-    subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=str(WORKSPACE_DIR), capture_output=True)
-    subprocess.run(["git", "clean", "-fd"], cwd=str(WORKSPACE_DIR), capture_output=True)
+    _git("reset", "--hard", "HEAD~1")
+    _git("clean", "-fd")
     return f"Rolled back workspace to checkpoint: {commits[1]}"
 
 
