@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import time
 from datetime import datetime, timezone
@@ -36,7 +36,7 @@ MODELS = [
     "gemini-3.6-flash",
 ]
 
-MAX_HISTORY_TURNS = 24  # Keeps context window bounded on long sessions
+MAX_HISTORY_TURNS = 40  # Keeps context window bounded on long sessions
 
 
 def _build_client() -> genai.Client:
@@ -110,10 +110,18 @@ def _system_instruction() -> str:
 
 
 def _trim_history(messages: list[types.Content]) -> list[types.Content]:
-    """Keeps the initial user prompt plus the most recent turns to prevent context overflow."""
+    """Keeps initial user prompt plus recent turns, slicing only on safe user text boundaries."""
     if len(messages) <= MAX_HISTORY_TURNS:
         return messages
-    return [messages[0]] + messages[-(MAX_HISTORY_TURNS - 1) :]
+    tail = messages[-(MAX_HISTORY_TURNS - 1) :]
+    # Advance start until we land on a user turn that is NOT a function_response
+    while tail:
+        first = tail[0]
+        has_fn_resp = any(getattr(p, "function_response", None) is not None for p in (first.parts or []))
+        if first.role == "user" and not has_fn_resp:
+            break
+        tail.pop(0)
+    return [messages[0]] + tail
 
 
 def call_gemini(client: genai.Client, messages: list[types.Content]):

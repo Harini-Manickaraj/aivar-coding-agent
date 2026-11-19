@@ -22,7 +22,7 @@ D -- No --> F["Final Verified Response and JSONL Trace"]
 
 * **Explicit ReAct Loop (`agent.py`):** Disables SDK Automatic Function Calling (`disable=True`) for deterministic step budgets (`max_steps=15`), structured Rich logging, stuck-loop detection, sliding-window history trimming, and multi-model failover across Gemini Flash models.
 * **Hardened Workspace Sandbox (`tools.py`):** Anchors `WORKSPACE_DIR` to `Path(__file__).resolve().parent / "workspace"` and validates every path via `Path.resolve().is_relative_to()` with symlink rejection.
-* **Developer Toolset:** Supports recursive `list_files`, binary-safe `read_file`, `write_file`, unique-match `edit_file`, `grep_search`, live terminal checklist `todo_write`, and `run_command` protected by a command denylist and `[r/n]` confirmation.
+* **Developer Toolset:** Supports recursive `list_files`, binary-safe `read_file`, `write_file`, unique-match `edit_file`, `grep_search`, live terminal checklist `todo_write`, and `run_command` protected by a command denylist and `[y/n]` confirmation.
 * **Automated Evaluation Suite (`evals/run_evals.py`):** Benchmarks end-to-end reliability across 6 coding, refactoring, data-cleaning, and security tasks (**100% pass rate**).
 
 ## Setup & Installation
