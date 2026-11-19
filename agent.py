@@ -18,6 +18,8 @@ from tools import (
     list_files,
     read_file,
     run_command,
+    todo_write,
+    undo_last_checkpoint,
     write_file,
 )
 
@@ -28,7 +30,6 @@ BASE_DIR = Path(__file__).resolve().parent
 TRACES_DIR = BASE_DIR / "traces"
 TRACES_DIR.mkdir(parents=True, exist_ok=True)
 
-# Single source of truth for model failover order
 MODELS = [
     "gemini-3.5-flash-lite",
     "gemini-3.8-flash",
@@ -36,7 +37,7 @@ MODELS = [
     "gemini-3.6-flash",
 ]
 
-MAX_HISTORY_TURNS = 40  # Keeps context window bounded on long sessions
+MAX_HISTORY_TURNS = 40
 
 
 def _build_client() -> genai.Client:
@@ -49,25 +50,7 @@ def _build_client() -> genai.Client:
     )
 
 
-_CURRENT_PLAN: list[str] = []
-
-def todo_write(tasks: list[str] | None = None, completed: list[str] | None = None) -> str:
-    """Updates and displays the agent's step-by-step execution plan in the terminal."""
-    global _CURRENT_PLAN
-    if tasks:
-        _CURRENT_PLAN = tasks
-    active_tasks = _CURRENT_PLAN
-    completed_set = set(completed or [])
-    lines = []
-    for task in active_tasks:
-        mark = "[x]" if task in completed_set else "[ ]"
-        lines.append(f"{mark} {task}")
-    plan_text = "\n".join(lines) if lines else "No tasks listed."
-    console.print(Panel(plan_text, title="📋 Agent Plan", border_style="cyan"))
-    return f"Plan updated ({len(completed_set)}/{len(active_tasks)} completed)."
-
-
-TOOL_MAP = {
+ALL_TOOLS = {
     "list_files": list_files,
     "read_file": read_file,
     "write_file": write_file,
@@ -77,15 +60,11 @@ TOOL_MAP = {
     "todo_write": todo_write,
 }
 
-AGENT_TOOLS = [
-    list_files,
-    read_file,
-    write_file,
-    edit_file,
-    grep_search,
-    run_command,
-    todo_write,
-]
+# Runtime context flags injected uniformly per tool name
+TOOL_CONTEXT_KWARGS = {
+    "run_command": lambda auto_approve, quiet: {"auto_approve": auto_approve},
+    "todo_write": lambda auto_approve, quiet: {"quiet": quiet},
+}
 
 
 def _load_project_memory() -> str:
@@ -96,17 +75,21 @@ def _load_project_memory() -> str:
     return ""
 
 
-def _system_instruction() -> str:
-    return (
-        "You are an autonomous AI software engineering agent operating inside a sandboxed `workspace/` directory.\n"
-        "Workflow rules:\n"
-        "1. For multi-step tasks, call `todo_write` first to outline a brief plan.\n"
-        "2. Inspect existing files with `list_files`, `read_file`, or `grep_search` before modifying code.\n"
-        "3. Prefer `edit_file` for targeted fixes on existing files and `write_file` for new files.\n"
-        "4. Always verify your work by running tests or executing the script via `run_command` before finishing.\n"
-        "5. If a command fails (non-zero exit code or STDERR), diagnose the error, fix the code, and re-run until it passes."
-        + _load_project_memory()
-    )
+def _system_instruction(active_tool_names: set[str]) -> str:
+    rules = [
+        "You are an autonomous AI software engineering agent operating inside a sandboxed `workspace/` directory.",
+        "Workflow rules:",
+    ]
+    if "todo_write" in active_tool_names:
+        rules.append("- For multi-step tasks, call `todo_write` first to outline a brief plan.")
+    rules.append("- Inspect existing files with `list_files`, `read_file`, or `grep_search` before modifying code.")
+    if "edit_file" in active_tool_names:
+        rules.append("- Prefer `edit_file` for targeted fixes on existing files and `write_file` for new files.")
+    else:
+        rules.append("- Use `write_file` to create or update files.")
+    rules.append("- Always verify your work by running tests or executing the script via `run_command` before finishing.")
+    rules.append("- If a command fails (non-zero exit code or STDERR), diagnose the error, fix the code, and re-run until it passes.")
+    return "\n".join(rules) + _load_project_memory()
 
 
 def _trim_history(messages: list[types.Content]) -> list[types.Content]:
@@ -114,7 +97,6 @@ def _trim_history(messages: list[types.Content]) -> list[types.Content]:
     if len(messages) <= MAX_HISTORY_TURNS:
         return messages
     tail = messages[-(MAX_HISTORY_TURNS - 1) :]
-    # Advance start until we land on a user turn that is NOT a function_response
     while tail:
         first = tail[0]
         has_fn_resp = any(getattr(p, "function_response", None) is not None for p in (first.parts or []))
@@ -124,12 +106,13 @@ def _trim_history(messages: list[types.Content]) -> list[types.Content]:
     return [messages[0]] + tail
 
 
-def call_gemini(client: genai.Client, messages: list[types.Content]):
+def call_gemini(client: genai.Client, messages: list[types.Content], active_tools: list):
     """Calls Gemini with explicit model failover, distinguishing transient vs fatal API errors."""
     last_error = None
+    active_names = {fn.__name__ for fn in active_tools}
     config = types.GenerateContentConfig(
-        system_instruction=_system_instruction(),
-        tools=AGENT_TOOLS,
+        system_instruction=_system_instruction(active_names),
+        tools=active_tools,
         temperature=0.2,
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
@@ -161,10 +144,18 @@ def run_agent(
     max_steps: int = 15,
     auto_approve: bool = False,
     quiet: bool = False,
+    enabled_tools: list[str] | None = None,
 ) -> dict:
     """Runs the ReAct agent loop and returns structured metrics for CLI & evaluation."""
     if messages is None:
         messages = []
+
+    active_map = (
+        {name: ALL_TOOLS[name] for name in enabled_tools if name in ALL_TOOLS}
+        if enabled_tools is not None
+        else dict(ALL_TOOLS)
+    )
+    active_tool_list = list(active_map.values())
 
     client = _build_client()
     messages.append(types.Content(role="user", parts=[types.Part.from_text(text=user_prompt)]))
@@ -178,7 +169,7 @@ def run_agent(
         if not quiet:
             console.print(f"\n[bold cyan]--- Step {step}/{max_steps}: Agent Thinking ---[/bold cyan]")
 
-        response = call_gemini(client, messages)
+        response = call_gemini(client, messages, active_tool_list)
 
         if response.usage_metadata and response.usage_metadata.total_token_count:
             total_tokens += response.usage_metadata.total_token_count
@@ -212,20 +203,17 @@ def run_agent(
             if not quiet:
                 console.print(f"[bold yellow]🔧 Tool Call:[/bold yellow] {fn_name}({fn_args})")
 
-            if fn_name not in TOOL_MAP:
-                result = f"Error: Unknown tool '{fn_name}'."
+            if fn_name not in active_map:
+                result = f"Error: Tool '{fn_name}' is not available."
             else:
                 try:
-                    if fn_name == "run_command":
-                        result = run_command(**fn_args, auto_approve=auto_approve)
-                    else:
-                        result = TOOL_MAP[fn_name](**fn_args)
+                    extra_kwargs = TOOL_CONTEXT_KWARGS.get(fn_name, lambda *_: {})(auto_approve, quiet)
+                    result = active_map[fn_name](**fn_args, **extra_kwargs)
                 except TypeError as e:
                     result = f"Error: Invalid arguments for '{fn_name}': {e}"
                 except Exception as e:
                     result = f"Error executing '{fn_name}': {e}"
 
-            # Stuck-loop detection: 3 identical consecutive tool calls
             if len(recent_calls) >= 3 and len(set(recent_calls[-3:])) == 1:
                 result += "\n\n[SYSTEM WARNING]: You have repeated this exact tool call 3 times. Stop repeating it and try a different approach."
 
@@ -242,7 +230,6 @@ def run_agent(
 
     elapsed = time.perf_counter() - start_time
     timeout_msg = f"Stopped after reaching max_steps={max_steps}."
-    # Append closing model message so conversation roles remain valid (user -> model)
     messages.append(types.Content(role="model", parts=[types.Part.from_text(text=timeout_msg)]))
     if not quiet:
         console.print(f"[bold red]{timeout_msg}[/bold red]")
@@ -269,7 +256,7 @@ if __name__ == "__main__":
     console.print(
         Panel(
             "[bold green]AIVAR Personal AI Coding Agent (v2 Hardened)[/bold green]\n"
-            "Type your coding task below (or type [bold]exit[/bold] to quit).",
+            "Commands: [bold]/undo[/bold] to roll back last file edit | [bold]exit[/bold] to quit.",
             expand=False,
         )
     )
@@ -281,8 +268,11 @@ if __name__ == "__main__":
                 continue
             if task.lower() in {"exit", "quit"}:
                 break
+            if task.lower() == "/undo":
+                msg = undo_last_checkpoint()
+                console.print(f"[bold magenta]↩ {msg}[/bold magenta]")
+                continue
             run_agent(task, messages=conversation_history, auto_approve=False)
         except KeyboardInterrupt:
             console.print("\n[yellow]Session interrupted. Goodbye![/yellow]")
             break
-

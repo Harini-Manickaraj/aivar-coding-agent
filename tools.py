@@ -1,13 +1,19 @@
-﻿import os
+﻿import difflib
+import os
 import re
 import subprocess
 from pathlib import Path
+
+from rich.console import Console
+from rich.panel import Panel
 
 BASE_DIR = Path(__file__).resolve().parent
 WORKSPACE_DIR = (BASE_DIR / "workspace").resolve()
 WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
+console = Console()
 MAX_OUTPUT_CHARS = 8000
+_CURRENT_PLAN: list[str] = []
 
 COMMAND_DENYLIST = [
     r"\.\.",
@@ -42,7 +48,58 @@ def _safe_path(file_path: str) -> Path:
     resolved_target = raw_target.resolve()
     if not resolved_target.is_relative_to(WORKSPACE_DIR):
         raise ValueError(f"Access denied: '{file_path}' escapes the workspace sandbox.")
+    if resolved_target == WORKSPACE_DIR / ".git" or (WORKSPACE_DIR / ".git") in resolved_target.parents:
+        raise ValueError("Access denied: Direct access to workspace .git metadata is blocked.")
     return resolved_target
+
+
+def _ensure_workspace_git() -> None:
+    """Initializes a local Git repository inside workspace/ for automatic checkpoints."""
+    git_dir = WORKSPACE_DIR / ".git"
+    if not git_dir.exists():
+        subprocess.run(["git", "init"], cwd=str(WORKSPACE_DIR), capture_output=True, text=True)
+        subprocess.run(["git", "config", "user.email", "agent@aivar.local"], cwd=str(WORKSPACE_DIR), capture_output=True)
+        subprocess.run(["git", "config", "user.name", "AIVAR Agent"], cwd=str(WORKSPACE_DIR), capture_output=True)
+        subprocess.run(["git", "add", "-A"], cwd=str(WORKSPACE_DIR), capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "checkpoint: initial workspace", "--allow-empty"],
+            cwd=str(WORKSPACE_DIR),
+            capture_output=True,
+        )
+
+
+def checkpoint_workspace(label: str) -> None:
+    """Commits current workspace state before a mutating file operation."""
+    _ensure_workspace_git()
+    subprocess.run(["git", "add", "-A"], cwd=str(WORKSPACE_DIR), capture_output=True)
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=str(WORKSPACE_DIR), capture_output=True, text=True)
+    if status.stdout.strip():
+        subprocess.run(
+            ["git", "commit", "-m", f"checkpoint: {label}"],
+            cwd=str(WORKSPACE_DIR),
+            capture_output=True,
+        )
+
+
+def undo_last_checkpoint() -> str:
+    """Rolls back the workspace to the snapshot taken before the most recent file edit."""
+    git_dir = WORKSPACE_DIR / ".git"
+    if not git_dir.exists():
+        return "Nothing to undo: no checkpoints exist yet."
+
+    log = subprocess.run(
+        ["git", "log", "-n", "2", "--pretty=format:%h %s"],
+        cwd=str(WORKSPACE_DIR),
+        capture_output=True,
+        text=True,
+    )
+    commits = [line for line in log.stdout.splitlines() if line.strip()]
+    if len(commits) < 2:
+        return "Nothing to undo: already at initial workspace state."
+
+    subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=str(WORKSPACE_DIR), capture_output=True)
+    subprocess.run(["git", "clean", "-fd"], cwd=str(WORKSPACE_DIR), capture_output=True)
+    return f"Rolled back workspace to checkpoint: {commits[1]}"
 
 
 def list_files(directory: str = ".") -> str:
@@ -90,18 +147,20 @@ def read_file(file_path: str) -> str:
 
 
 def write_file(file_path: str, content: str) -> str:
-    """Creates or overwrites a file inside the workspace with the given content."""
+    """Creates or overwrites a file inside the workspace after saving a Git checkpoint."""
     try:
         target = _safe_path(file_path)
+        checkpoint_workspace(f"before write_file({file_path})")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
+        checkpoint_workspace(f"after write_file({file_path})")
         return f"Successfully wrote {len(content)} chars to '{file_path}'."
     except Exception as e:
         return f"Error writing file '{file_path}': {e}"
 
 
 def edit_file(file_path: str, old_str: str, new_str: str) -> str:
-    """Replaces an exact unique substring in an existing workspace file."""
+    """Replaces an exact unique substring in an existing workspace file and returns a unified diff."""
     try:
         target = _safe_path(file_path)
         if not target.exists() or not target.is_file():
@@ -114,9 +173,21 @@ def edit_file(file_path: str, old_str: str, new_str: str) -> str:
         if occurrences > 1:
             return f"Error: `old_str` matched {occurrences} times in '{file_path}'. Provide more surrounding context so the match is unique."
 
+        checkpoint_workspace(f"before edit_file({file_path})")
         updated = content.replace(old_str, new_str, 1)
         target.write_text(updated, encoding="utf-8")
-        return f"Successfully edited '{file_path}' (1 replacement made)."
+        checkpoint_workspace(f"after edit_file({file_path})")
+
+        diff = "\n".join(
+            difflib.unified_diff(
+                content.splitlines(),
+                updated.splitlines(),
+                fromfile=f"a/{file_path}",
+                tofile=f"b/{file_path}",
+                lineterm="",
+            )
+        )
+        return _truncate(f"Successfully edited '{file_path}' (1 replacement made).\n\nDiff:\n{diff}")
     except Exception as e:
         return f"Error editing file '{file_path}': {e}"
 
@@ -150,6 +221,23 @@ def grep_search(pattern: str, directory: str = ".") -> str:
         return f"Invalid regex pattern: {e}"
     except Exception as e:
         return f"Error searching files: {e}"
+
+
+def todo_write(tasks: list[str] | None = None, completed: list[str] | None = None, quiet: bool = False) -> str:
+    """Updates and displays the agent's step-by-step execution plan in the terminal."""
+    global _CURRENT_PLAN
+    if tasks:
+        _CURRENT_PLAN = tasks
+    active_tasks = _CURRENT_PLAN
+    completed_set = set(completed or [])
+    lines = []
+    for task in active_tasks:
+        mark = "[x]" if task in completed_set else "[ ]"
+        lines.append(f"{mark} {task}")
+    plan_text = "\n".join(lines) if lines else "No tasks listed."
+    if not quiet:
+        console.print(Panel(plan_text, title="📋 Agent Plan", border_style="cyan"))
+    return f"Plan updated ({len(completed_set)}/{len(active_tasks)} completed)."
 
 
 def run_command(command: str, auto_approve: bool = False) -> str:
