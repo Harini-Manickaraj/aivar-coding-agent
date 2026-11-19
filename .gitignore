@@ -4,3 +4,5 @@ venv/
 workspace/
 
 __pycache__/
+
+traces/
