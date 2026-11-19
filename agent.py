@@ -1,131 +1,280 @@
+﻿import json
 import os
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 from rich.console import Console
-from rich.panel import Panel
 from rich.markdown import Markdown
+from rich.panel import Panel
 
-# Import the 4 hands we built in tools.py
-from tools import list_files, read_file, write_file, run_command
+from tools import (
+    WORKSPACE_DIR,
+    edit_file,
+    grep_search,
+    list_files,
+    read_file,
+    run_command,
+    write_file,
+)
 
 load_dotenv()
 console = Console()
 
-# Fast failover client (avoids 30-second freezes if a model has a 503 spike)
-client = genai.Client(
-    api_key=os.getenv("GEMINI_API_KEY"),
-    http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1))
-)
+BASE_DIR = Path(__file__).resolve().parent
+TRACES_DIR = BASE_DIR / "traces"
+TRACES_DIR.mkdir(parents=True, exist_ok=True)
 
-MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]
+# Single source of truth for model failover order
+MODELS = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+]
 
-# Map tool names (strings) to actual Python functions
+MAX_HISTORY_TURNS = 24  # Keeps context window bounded on long sessions
+
+
+def _build_client() -> genai.Client:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is missing. Check your .env file.")
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)),
+    )
+
+
+_CURRENT_PLAN: list[str] = []
+
+def todo_write(tasks: list[str] | None = None, completed: list[str] | None = None) -> str:
+    """Updates and displays the agent's step-by-step execution plan in the terminal."""
+    global _CURRENT_PLAN
+    if tasks:
+        _CURRENT_PLAN = tasks
+    active_tasks = _CURRENT_PLAN
+    completed_set = set(completed or [])
+    lines = []
+    for task in active_tasks:
+        mark = "[x]" if task in completed_set else "[ ]"
+        lines.append(f"{mark} {task}")
+    plan_text = "\n".join(lines) if lines else "No tasks listed."
+    console.print(Panel(plan_text, title="📋 Agent Plan", border_style="cyan"))
+    return f"Plan updated ({len(completed_set)}/{len(active_tasks)} completed)."
+
+
 TOOL_MAP = {
     "list_files": list_files,
     "read_file": read_file,
     "write_file": write_file,
+    "edit_file": edit_file,
+    "grep_search": grep_search,
     "run_command": run_command,
+    "todo_write": todo_write,
 }
 
-SYSTEM_PROMPT = """You are an autonomous AI coding agent working inside a sandboxed 'workspace' directory.
-You have tools to list files, read files, write files, and run terminal commands.
-Follow this workflow strictly:
-1. Always inspect existing files first if needed.
-2. Write clean, modular, well-documented code.
-3. Always test your code using `run_command` to verify there are no syntax or runtime errors.
-4. If a command returns a STDERR traceback, read the error, fix the code using `write_file`, and re-test until it passes.
-5. Once verified, summarize what you built clearly for the user."""
+AGENT_TOOLS = [
+    list_files,
+    read_file,
+    write_file,
+    edit_file,
+    grep_search,
+    run_command,
+    todo_write,
+]
 
-def call_gemini(messages):
-    """Calls Gemini with automatic model fallback and manual ReAct loop control."""
-    config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
-        tools=[list_files, read_file, write_file, run_command],
-        # Disable SDK's hidden AFC so our explicit ReAct loop controls & logs every step
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        temperature=0.2,
+
+def _load_project_memory() -> str:
+    """Loads optional workspace/AGENT.md instructions if present."""
+    agent_md = WORKSPACE_DIR / "AGENT.md"
+    if agent_md.exists() and agent_md.is_file():
+        return f"\n\nProject-Specific Instructions (from AGENT.md):\n{agent_md.read_text(encoding='utf-8')[:3000]}"
+    return ""
+
+
+def _system_instruction() -> str:
+    return (
+        "You are an autonomous AI software engineering agent operating inside a sandboxed `workspace/` directory.\n"
+        "Workflow rules:\n"
+        "1. For multi-step tasks, call `todo_write` first to outline a brief plan.\n"
+        "2. Inspect existing files with `list_files`, `read_file`, or `grep_search` before modifying code.\n"
+        "3. Prefer `edit_file` for targeted fixes on existing files and `write_file` for new files.\n"
+        "4. Always verify your work by running tests or executing the script via `run_command` before finishing.\n"
+        "5. If a command fails (non-zero exit code or STDERR), diagnose the error, fix the code, and re-run until it passes."
+        + _load_project_memory()
     )
+
+
+def _trim_history(messages: list[types.Content]) -> list[types.Content]:
+    """Keeps the initial user prompt plus the most recent turns to prevent context overflow."""
+    if len(messages) <= MAX_HISTORY_TURNS:
+        return messages
+    return [messages[0]] + messages[-(MAX_HISTORY_TURNS - 1) :]
+
+
+def call_gemini(client: genai.Client, messages: list[types.Content]):
+    """Calls Gemini with explicit model failover, distinguishing transient vs fatal API errors."""
+    last_error = None
+    config = types.GenerateContentConfig(
+        system_instruction=_system_instruction(),
+        tools=AGENT_TOOLS,
+        temperature=0.2,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+    )
+
     for model_name in MODELS:
         try:
             return client.models.generate_content(
                 model=model_name,
-                contents=messages,
+                contents=_trim_history(messages),
                 config=config,
             )
-        except Exception:
-            console.print(f"[yellow]Model {model_name} busy, switching to backup...[/yellow]")
-    raise RuntimeError("All Gemini models are currently unavailable. Please try again in a minute.")
+        except errors.APIError as e:
+            last_error = e
+            if e.code in (429, 500, 502, 503, 504):
+                console.print(f"[yellow]Model {model_name} unavailable ({e.code}), switching to backup...[/yellow]")
+                continue
+            raise RuntimeError(f"Fatal Gemini API Error ({e.code}): {e.message}") from e
+        except Exception as e:
+            last_error = e
+            console.print(f"[yellow]Transient network issue on {model_name}: {e}, switching...[/yellow]")
+            continue
 
-def run_agent(user_task: str, messages: list, max_steps: int = 15):
-    """The core ReAct (Reason + Act) autonomous execution loop."""
-    messages.append(types.Content(role="user", parts=[types.Part.from_text(text=user_task)]))
+    raise RuntimeError(f"All fallback Gemini models failed. Last error: {last_error}")
+
+
+def run_agent(
+    user_prompt: str,
+    messages: list[types.Content] | None = None,
+    max_steps: int = 15,
+    auto_approve: bool = False,
+    quiet: bool = False,
+) -> dict:
+    """Runs the ReAct agent loop and returns structured metrics for CLI & evaluation."""
+    if messages is None:
+        messages = []
+
+    client = _build_client()
+    messages.append(types.Content(role="user", parts=[types.Part.from_text(text=user_prompt)]))
+
+    start_time = time.perf_counter()
+    total_tokens = 0
+    recent_calls: list[str] = []
+    trace_events: list[dict] = []
 
     for step in range(1, max_steps + 1):
-        console.print(f"\n[bold cyan]--- Step {step}/{max_steps}: Agent Thinking ---[/bold cyan]")
-        response = call_gemini(messages)
+        if not quiet:
+            console.print(f"\n[bold cyan]--- Step {step}/{max_steps}: Agent Thinking ---[/bold cyan]")
 
-        # Save the model's response (text or tool call request) into memory
-        model_content = response.candidates[0].content
-        messages.append(model_content)
+        response = call_gemini(client, messages)
 
-        # Check if Gemini wants to call any tools
-        if response.function_calls:
-            tool_response_parts = []
+        if response.usage_metadata and response.usage_metadata.total_token_count:
+            total_tokens += response.usage_metadata.total_token_count
 
-            for call in response.function_calls:
-                func_name = call.name
-                func_args = dict(call.args)
-                console.print(f"[bold magenta]🔧 Tool Call:[/bold magenta] [bold]{func_name}[/bold]({func_args})")
+        if not response.candidates or not response.candidates[0].content or not response.candidates[0].content.parts:
+            msg = "Agent stopped: Received an empty or safety-blocked model response."
+            messages.append(types.Content(role="model", parts=[types.Part.from_text(text=msg)]))
+            return {"success": False, "steps": step, "tokens": total_tokens, "elapsed": time.perf_counter() - start_time, "output": msg}
 
-                # Execute the matching Python function from tools.py
-                if func_name in TOOL_MAP:
-                    result = TOOL_MAP[func_name](**func_args)
-                else:
-                    result = f"Error: Unknown tool '{func_name}'"
+        assistant_content = response.candidates[0].content
+        messages.append(assistant_content)
 
-                # Show a short preview of what the tool returned
-                preview = result if len(result) < 300 else result[:300] + "\n... [truncated]"
-                console.print(Panel(preview, title=f"Result from {func_name}", border_style="dim"))
+        function_calls = [p.function_call for p in assistant_content.parts if p.function_call]
 
-                # Package the result so Gemini can read it on the next loop
-                tool_response_parts.append(
-                    types.Part.from_function_response(
-                        name=func_name,
-                        response={"result": result},
-                    )
-                )
+        if not function_calls:
+            final_text = response.text or "(Task completed with no text summary.)"
+            elapsed = time.perf_counter() - start_time
+            if not quiet:
+                console.print(Panel(Markdown(final_text), title="✅ Agent Finished", border_style="green"))
+                console.print(f"[dim]Stats: {step} steps | {total_tokens} tokens | {elapsed:.2f}s[/dim]")
+            _save_trace(user_prompt, trace_events, success=True, steps=step, tokens=total_tokens, elapsed=elapsed)
+            return {"success": True, "steps": step, "tokens": total_tokens, "elapsed": elapsed, "output": final_text}
 
-            # Feed all tool outputs back into conversation memory
-            messages.append(types.Content(role="user", parts=tool_response_parts))
-        else:
-            # No more tool calls! The agent is finished and has a final answer.
-            console.print(Panel(Markdown(response.text), title="✅ Agent Finished", border_style="green"))
-            return
+        response_parts = []
+        for call in function_calls:
+            fn_name = call.name
+            fn_args = dict(call.args) if call.args else {}
+            call_sig = f"{fn_name}:{json.dumps(fn_args, sort_keys=True)}"
+            recent_calls.append(call_sig)
 
-    console.print("[bold red]⚠️ Max step limit reached! Stopping loop for safety.[/bold red]")
+            if not quiet:
+                console.print(f"[bold yellow]🔧 Tool Call:[/bold yellow] {fn_name}({fn_args})")
+
+            if fn_name not in TOOL_MAP:
+                result = f"Error: Unknown tool '{fn_name}'."
+            else:
+                try:
+                    if fn_name == "run_command":
+                        result = run_command(**fn_args, auto_approve=auto_approve)
+                    else:
+                        result = TOOL_MAP[fn_name](**fn_args)
+                except TypeError as e:
+                    result = f"Error: Invalid arguments for '{fn_name}': {e}"
+                except Exception as e:
+                    result = f"Error executing '{fn_name}': {e}"
+
+            # Stuck-loop detection: 3 identical consecutive tool calls
+            if len(recent_calls) >= 3 and len(set(recent_calls[-3:])) == 1:
+                result += "\n\n[SYSTEM WARNING]: You have repeated this exact tool call 3 times. Stop repeating it and try a different approach."
+
+            if not quiet:
+                preview = result if len(result) <= 600 else result[:600] + "\n... [truncated in CLI]"
+                console.print(Panel(preview, title=f"Result from {fn_name}", border_style="blue"))
+
+            trace_events.append({"step": step, "tool": fn_name, "args": fn_args, "result_preview": result[:300]})
+            response_parts.append(
+                types.Part.from_function_response(name=fn_name, response={"result": result})
+            )
+
+        messages.append(types.Content(role="user", parts=response_parts))
+
+    elapsed = time.perf_counter() - start_time
+    timeout_msg = f"Stopped after reaching max_steps={max_steps}."
+    # Append closing model message so conversation roles remain valid (user -> model)
+    messages.append(types.Content(role="model", parts=[types.Part.from_text(text=timeout_msg)]))
+    if not quiet:
+        console.print(f"[bold red]{timeout_msg}[/bold red]")
+    _save_trace(user_prompt, trace_events, success=False, steps=max_steps, tokens=total_tokens, elapsed=elapsed)
+    return {"success": False, "steps": max_steps, "tokens": total_tokens, "elapsed": elapsed, "output": timeout_msg}
 
 
-def main():
-    console.print(Panel.fit(
-        "[bold green]AIVAR Personal AI Coding Agent[/bold green]\n"
-        "Type your coding task below (or type [bold]exit[/bold] to quit).",
-        border_style="green"
-    ))
-
-    # Conversation memory persists across multiple prompts in one session
-    messages = []
-
-    while True:
-        user_input = console.input("\n[bold blue]You > [/bold blue]").strip()
-        if not user_input:
-            continue
-        if user_input.lower() in {"exit", "quit"}:
-            console.print("[dim]Goodbye![/dim]")
-            break
-
-        run_agent(user_input, messages)
+def _save_trace(prompt: str, events: list[dict], success: bool, steps: int, tokens: int, elapsed: float) -> None:
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "prompt": prompt,
+        "success": success,
+        "steps": steps,
+        "tokens": tokens,
+        "elapsed_sec": round(elapsed, 2),
+        "events": events,
+    }
+    trace_file = TRACES_DIR / "runs.jsonl"
+    with trace_file.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
 
 
 if __name__ == "__main__":
-    main()
+    console.print(
+        Panel(
+            "[bold green]AIVAR Personal AI Coding Agent (v2 Hardened)[/bold green]\n"
+            "Type your coding task below (or type [bold]exit[/bold] to quit).",
+            expand=False,
+        )
+    )
+    conversation_history: list[types.Content] = []
+    while True:
+        try:
+            task = input("\nYou > ").strip()
+            if not task:
+                continue
+            if task.lower() in {"exit", "quit"}:
+                break
+            run_agent(task, messages=conversation_history, auto_approve=False)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Session interrupted. Goodbye![/yellow]")
+            break
+
