@@ -117,17 +117,20 @@ def undo_last_checkpoint() -> str:
         return "Nothing to undo: workspace checkpoint repository is uninitialized."
 
     head_msg = _git("log", "-1", "--pretty=format:%s").stdout.strip()
-    if not head_msg.startswith("checkpoint: after"):
+    if not head_msg.startswith("checkpoint:"):
         return "Nothing to undo: no completed agent file edit at HEAD."
 
-    log = _git("log", "-n", "2", "--pretty=format:%h %s")
+    # If HEAD is 'checkpoint: after ...', reset 1 commit to its matching 'before' snapshot.
+    # If HEAD is already a 'before' snapshot (from a previous /undo), reset 2 commits to the prior 'before' snapshot.
+    steps_back = 1 if head_msg.startswith("checkpoint: after") else 2
+    log = _git("log", "-n", str(steps_back + 1), "--pretty=format:%h %s")
     commits = [line for line in log.stdout.splitlines() if line.strip()]
-    if len(commits) < 2:
+    if len(commits) <= steps_back:
         return "Nothing to undo: already at initial workspace state."
 
-    _git("reset", "--hard", "HEAD~1")
+    _git("reset", "--hard", f"HEAD~{steps_back}")
     _git("clean", "-fd")
-    return f"Rolled back workspace to checkpoint: {commits[1]}"
+    return f"Rolled back workspace to checkpoint: {commits[steps_back]}"
 
 
 def list_files(directory: str = ".") -> str:

@@ -1,56 +1,24 @@
-# AIVAR Personal AI Coding Agent
+# AIVAR Autonomous AI Coding Agent
 
-A terminal-based autonomous AI software engineering agent built from scratch in Python using the official `google-genai` SDK. Rather than relying on black-box agent frameworks, this project implements an explicit **ReAct (`Observe -> Reason -> Act`)** control loop with sandboxed filesystem tools, surgical file editing, repository regex search, live task planning, human-in-the-loop (HITL) command approval, and an automated 6-task evaluation harness.
+A terminal-based autonomous software engineering agent built in Python using the Google GenAI SDK (`gemini-3.5-flash-lite` / `gemini-3.8-flash` failover), featuring sandboxed file editing, unified diffs, automatic workspace Git checkpoints with `/undo`, human-in-the-loop shell approvals, and an automated multi-trial + ablation evaluation suite.
 
-## System Architecture
+## Key Features
+* **Custom ReAct Loop (`agent.py`):** Explicit control over step budgets (`max_steps=15`), boundary-safe history trimming (`_trim_history`), 3x stuck-loop detection, 2-pass model failover with 30s HTTP timeout, and JSONL telemetry (`traces/runs.jsonl`).
+* **Sandboxed Workspace & Isolated Git Checkpoints (`tools.py`):** All file operations are locked inside `workspace/` via `Path.resolve().is_relative_to()` with symlink and `.git` metadata blocking. Every `write_file` and `edit_file` saves isolated `before`/`after` Git snapshots (`GIT_DIR=workspace/.git`, `GIT_WORK_TREE=workspace`), returns a unified diff on edits, and supports instant step-by-step CLI rollback via `/undo`.
+* **Human-in-the-Loop Command Execution:** Shell commands run inside `workspace/` only after passing `COMMAND_DENYLIST` and explicit `[y/n]` user confirmation.
+* **Project Memory & Live Planning:** Reads optional `workspace/AGENT.md` rules and renders live task checklists via `todo_write`.
 
-```mermaid
-flowchart TD
-U["User Prompt"] --> H["Conversation State and Sliding Window"]
-H --> M["Gemini API and Model Failover"]
-M --> D{"Function Call?"}
-D -- Yes --> R["Tool Router and Stuck-Loop Guard"]
-R --> T1["Sandboxed File Tools: list, read, write, edit, grep"]
-R --> T2["Planning Tool: todo_write"]
-R --> T3["HITL Shell Runner: Denylist and y/n Prompt"]
-T1 & T2 & T3 --> O["Truncated Observation"]
-O --> H
-D -- No --> F["Final Verified Response and JSONL Trace"]
-```
-
-## Key Capabilities
-
-* **Explicit ReAct Loop (`agent.py`):** Disables SDK Automatic Function Calling (`disable=True`) for deterministic step budgets (`max_steps=15`), structured Rich logging, stuck-loop detection, sliding-window history trimming, and multi-model failover across Gemini Flash models.
-* **Hardened Workspace Sandbox (`tools.py`):** Anchors `WORKSPACE_DIR` to `Path(__file__).resolve().parent / "workspace"` and validates every path via `Path.resolve().is_relative_to()` with symlink rejection.
-* **Developer Toolset:** Supports recursive `list_files`, binary-safe `read_file`, `write_file`, unique-match `edit_file`, `grep_search`, live terminal checklist `todo_write`, and `run_command` protected by a command denylist and `[y/n]` confirmation.
-* **Automated Evaluation Suite (`evals/run_evals.py`):** Benchmarks end-to-end reliability across 6 coding, refactoring, data-cleaning, and security tasks (**100% pass rate**).
-
-## Setup & Installation
-
-1. **Clone the repository and create a virtual environment:**
-   ```bash
-   git clone https://github.com/Harini-Manickaraj/aivar-coding-agent.git
-   cd aivar-coding-agent
-   python -m venv venv
-   # Windows:
-   .\venv\Scripts\Activate.ps1
-   # macOS/Linux:
-   source venv/bin/activate
-   ```
-2. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. **Configure your API key:**
-   ```bash
-   cp .env.example .env
-   # Add your GEMINI_API_KEY inside .env
-   ```
-
-## Usage
-
+## Quick Start
 ```bash
-python agent.py                                          # Run the interactive coding agent
-python evals/run_evals.py                                 # Run the automated 6-task benchmark suite
-python -m unittest tests/test_security.py                 # Run security & tool unit tests
+pip install -r requirements.txt
+cp .env.example .env   # Add your GEMINI_API_KEY
+python agent.py        # Interactive CLI (supports /undo and exit)
 ```
+
+## Verification & Benchmarks
+```bash
+python -m unittest tests/test_security.py   # 8 unit & security regression tests
+python evals/run_evals.py --runs 3          # 6 tasks x 3 trials (pass@3) + ablation
+```
+
+See [`REPORT.md`](./REPORT.md) for full architecture diagrams, threat model, 18-trial `pass@3` results, and `Full Toolset` vs. `Write-Only` ablation analysis.
