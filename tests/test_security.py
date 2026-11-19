@@ -1,4 +1,6 @@
+import os
 import shutil
+import stat
 import unittest
 from pathlib import Path
 
@@ -16,9 +18,13 @@ from tools import (
 
 class TestSecurityAndCheckpoints(unittest.TestCase):
     def setUp(self):
+        def _rm_readonly(func, path, _):
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+
         for item in WORKSPACE_DIR.iterdir():
             if item.is_dir():
-                shutil.rmtree(item, ignore_errors=True)
+                shutil.rmtree(item, onerror=_rm_readonly)
             else:
                 item.unlink()
 
