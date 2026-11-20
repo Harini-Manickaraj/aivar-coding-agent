@@ -2,6 +2,9 @@
 
 A terminal-based autonomous software engineering agent built in Python using the Google GenAI SDK (`gemini-3.5-flash-lite` / `gemini-3.8-flash` failover), featuring sandboxed file editing, unified diffs, isolated workspace Git checkpoints with `/undo`, human-in-the-loop shell approvals, and an automated multi-trial + ablation evaluation suite.
 
+## Demo Video
+* **Full Walkthrough & Web Workbench Demo:** [Watch Video](https://drive.google.com/file/d/1bIHL_l0-lcP5iX4csZov3DsCdpdHm23b/view?usp=drive_link)
+
 ## Key Features
 * **Custom ReAct Loop (`agent.py`):** Explicit control over step budgets (`max_steps=15`), boundary-safe history trimming (`_trim_history`), 3x stuck-loop detection, 2-pass model failover with 30s HTTP timeout, and JSONL telemetry (`traces/runs.jsonl`).
 * **Sandboxed Workspace & Isolated Git Checkpoints (`tools.py`):** All file operations are locked inside `workspace/` via `Path.resolve().is_relative_to()` with symlink and `.git` metadata blocking. Every `write_file` and `edit_file` saves isolated `before`/`after` Git snapshots (`GIT_DIR=workspace/.git`, `GIT_WORK_TREE=workspace`), returns a unified diff on edits, and supports instant step-by-step CLI rollback via `/undo`.
