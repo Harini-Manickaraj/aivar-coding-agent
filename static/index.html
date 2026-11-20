@@ -1,0 +1,1572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AIVAR Coding Assistant</title>
+  <meta name="application-name" content="AIVAR WORKSTATION">
+  <style>
+    :root {
+      --canvas: #0d1117;
+      --panel: #161b22;
+      --panel-elevated: #21262d;
+      --panel-hover: #262c36;
+      --border: #30363d;
+      --border-focus: #58a6ff;
+      --text-primary: #f0f6fc;
+      --text-secondary: #8b949e;
+      --text-muted: #6e7681;
+      --accent: #2f81f7;
+      --accent-hover: #388bfd;
+      --accent-bg: rgba(47, 129, 247, 0.15);
+      --green: #2ea043;
+      --green-hover: #3fb950;
+      --green-bg: rgba(46, 160, 67, 0.15);
+      --red: #f85149;
+      --red-hover: #da3633;
+      --red-bg: rgba(248, 81, 73, 0.15);
+      --amber: #d29922;
+      --amber-bg: rgba(210, 153, 34, 0.15);
+      --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: 'Consolas', 'JetBrains Mono', 'Fira Code', 'Menlo', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--canvas);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.5;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .app-container {
+      display: flex;
+      height: 100vh;
+      width: 100vw;
+      background: var(--canvas);
+    }
+
+    /* LEFT PANEL (45% width): Task & Progress Feed */
+    .left-panel {
+      flex: 0 0 45%;
+      width: 45%;
+      min-width: 320px;
+      max-width: 650px;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      background: var(--panel);
+      height: 100vh;
+    }
+
+    /* RIGHT PANEL (55% width): Live File Viewer */
+    .right-panel {
+      flex: 1 1 55%;
+      display: flex;
+      flex-direction: column;
+      background: var(--canvas);
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Top Header */
+    .panel-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-icon {
+      width: 28px;
+      height: 28px;
+      background: var(--accent-bg);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      color: var(--accent);
+    }
+
+    .brand-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+      letter-spacing: -0.2px;
+    }
+
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: var(--panel-elevated);
+      color: var(--text-secondary);
+      transition: all 0.2s ease;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      display: inline-block;
+    }
+
+    .status-badge.ready .status-dot {
+      background: var(--green);
+      box-shadow: 0 0 6px rgba(46, 160, 67, 0.4);
+    }
+    .status-badge.ready {
+      color: var(--green);
+      border-color: rgba(46, 160, 67, 0.3);
+    }
+
+    .status-badge.working .status-dot {
+      background: var(--accent);
+      box-shadow: 0 0 8px rgba(47, 129, 247, 0.6);
+      animation: pulse 1s infinite alternate;
+    }
+    .status-badge.working {
+      color: var(--accent);
+      border-color: rgba(47, 129, 247, 0.3);
+    }
+
+    .status-badge.approval .status-dot {
+      background: var(--amber);
+      box-shadow: 0 0 8px rgba(210, 153, 34, 0.8);
+      animation: pulse 0.7s infinite alternate;
+    }
+    .status-badge.approval {
+      color: var(--amber);
+      border-color: rgba(210, 153, 34, 0.4);
+      background: var(--amber-bg);
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.4; transform: scale(0.9); }
+      100% { opacity: 1; transform: scale(1.2); }
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: background 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    .btn-secondary {
+      background: var(--panel-elevated);
+      border-color: var(--border);
+      color: var(--text-primary);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--panel-hover);
+      border-color: var(--text-secondary);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: var(--accent);
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-secondary);
+      border-color: transparent;
+    }
+    .btn-ghost:hover:not(:disabled) {
+      background: var(--panel-elevated);
+      color: var(--text-primary);
+    }
+
+    .btn-sm {
+      padding: 4px 8px;
+      font-size: 11px;
+    }
+
+    /* Feed Container */
+    .feed-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      scroll-behavior: smooth;
+    }
+
+    /* Quick-Start Cards */
+    .quick-starts-wrap {
+      background: var(--canvas);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .quick-starts-header {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .quick-cards-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+
+    .quick-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      text-align: left;
+      cursor: pointer;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      transition: all 0.15s ease;
+      font-family: inherit;
+    }
+
+    .quick-card:hover {
+      background: var(--panel-elevated);
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+
+    .quick-card-icon {
+      font-size: 16px;
+      line-height: 1;
+      margin-top: 2px;
+    }
+
+    .quick-card-body {
+      flex: 1;
+    }
+
+    .quick-card-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 2px;
+    }
+
+    .quick-card-desc {
+      font-size: 11px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+    }
+
+    .quick-card-desc code {
+      background: var(--canvas);
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-primary);
+    }
+
+    /* Step / Activity Cards */
+    .feed-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: border-color 0.15s ease;
+      animation: fadeIn 0.2s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .feed-card.user-prompt {
+      background: var(--canvas);
+      border-color: var(--accent);
+      border-left: 3px solid var(--accent);
+    }
+
+    .feed-card.running {
+      border-color: var(--accent);
+      background: rgba(47, 129, 247, 0.05);
+    }
+
+    .feed-card.approval {
+      border-color: var(--amber);
+      background: var(--amber-bg);
+    }
+
+    .feed-card.security {
+      border-color: var(--red);
+      background: var(--red-bg);
+    }
+
+    .feed-card.error {
+      border-color: var(--red);
+      background: var(--red-bg);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .card-badge-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-step-badge {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      background: var(--panel-elevated);
+      color: var(--text-secondary);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .card-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .card-body {
+      font-size: 12px;
+      color: var(--text-primary);
+      line-height: 1.5;
+    }
+
+    .card-body p {
+      margin-bottom: 6px;
+    }
+
+    .card-body pre {
+      background: var(--canvas);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      overflow-x: auto;
+      margin-top: 6px;
+    }
+
+    /* Checklist for Planning */
+    .checklist-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 6px;
+    }
+
+    .checklist-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+
+    .checklist-box {
+      font-size: 13px;
+      color: var(--accent);
+      user-select: none;
+      line-height: 1.3;
+    }
+
+    .checklist-item.done {
+      color: var(--text-secondary);
+      text-decoration: line-through;
+    }
+
+    .checklist-item.done .checklist-box {
+      color: var(--green);
+    }
+
+    /* Approval Card Buttons */
+    .approval-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .btn-approve {
+      background: var(--green);
+      color: #ffffff;
+      border: 1px solid var(--green);
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 700;
+      flex: 1;
+    }
+    .btn-approve:hover {
+      background: var(--green-hover);
+    }
+
+    .btn-deny {
+      background: transparent;
+      color: var(--red);
+      border: 1px solid var(--red);
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      flex: 1;
+    }
+    .btn-deny:hover {
+      background: var(--red-bg);
+    }
+
+    /* Spinning ring icon */
+    .spinner-ring {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(47, 129, 247, 0.3);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: inline-block;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Composer / Input Area */
+    .composer-container {
+      padding: 14px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--panel);
+      flex-shrink: 0;
+    }
+
+    .composer-form {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .input-wrapper {
+      background: var(--canvas);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: border-color 0.15s ease;
+    }
+
+    .input-wrapper:focus-within {
+      border-color: var(--border-focus);
+    }
+
+    .prompt-textarea {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 13px;
+      resize: none;
+      min-height: 48px;
+      max-height: 150px;
+      width: 100%;
+      line-height: 1.5;
+    }
+
+    .prompt-textarea::placeholder {
+      color: var(--text-muted);
+    }
+
+    .composer-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .auto-approve-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .auto-approve-label input {
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    /* RIGHT PANEL: Live File Viewer */
+    .viewer-header {
+      height: 44px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .file-tabs {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      height: 100%;
+    }
+    .file-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .file-tab {
+      padding: 6px 12px;
+      border-radius: 6px 6px 0 0;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--text-secondary);
+      background: transparent;
+      border: 1px solid transparent;
+      border-bottom: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .file-tab:hover {
+      color: var(--text-primary);
+      background: var(--panel-elevated);
+    }
+
+    .file-tab.active {
+      color: var(--accent);
+      background: var(--canvas);
+      border-color: var(--border);
+      font-weight: 600;
+    }
+
+    .viewer-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .viewer-content {
+      flex: 1;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      background: var(--canvas);
+      position: relative;
+    }
+
+    /* Code View */
+    .code-container {
+      display: flex;
+      min-height: 100%;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .line-numbers {
+      padding: 12px 10px;
+      background: var(--canvas);
+      color: var(--text-muted);
+      text-align: right;
+      user-select: none;
+      border-right: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .code-lines {
+      padding: 12px 16px;
+      color: var(--text-primary);
+      overflow-x: auto;
+      flex: 1;
+      white-space: pre;
+    }
+
+    /* Diff View */
+    .diff-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .diff-row {
+      white-space: pre;
+    }
+
+    .diff-row.add {
+      background: var(--green-bg);
+      color: #7ee787;
+    }
+
+    .diff-row.del {
+      background: var(--red-bg);
+      color: #ffa198;
+    }
+
+    .diff-row.header {
+      background: rgba(47, 129, 247, 0.1);
+      color: #79c0ff;
+      font-weight: 600;
+    }
+
+    .diff-row.range {
+      background: rgba(210, 153, 34, 0.1);
+      color: #d2a8ff;
+    }
+
+    .diff-row td {
+      padding: 2px 12px;
+    }
+
+    .diff-row td.sign {
+      width: 24px;
+      text-align: center;
+      user-select: none;
+      border-right: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    /* Empty State */
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px;
+      text-align: center;
+      color: var(--text-secondary);
+      gap: 12px;
+    }
+
+    .empty-state-icon {
+      font-size: 40px;
+      opacity: 0.7;
+    }
+
+    .empty-state-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .empty-state-desc {
+      font-size: 12px;
+      max-width: 320px;
+      line-height: 1.5;
+    }
+
+    /* Responsive for Small Screens & VS Code Simple Browser */
+    @media (max-width: 860px) {
+      .app-container {
+        flex-direction: column;
+      }
+      .left-panel {
+        width: 100%;
+        max-width: none;
+        height: 50vh;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      .right-panel {
+        width: 100%;
+        height: 50vh;
+      }
+    }
+
+    /* System meta tag for tests and verification */
+    .system-meta-row {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="system-meta-row" aria-hidden="true">
+    AIVAR WORKSTATION: 01 // WORKSPACE | 02 // AGENT PLAN | 03 // TELEMETRY
+  </div>
+
+  <div class="app-container">
+    <!-- LEFT PANEL (45% width): Simple Task & Progress Feed -->
+    <aside class="left-panel">
+      <!-- Header -->
+      <header class="panel-header">
+        <div class="brand">
+          <div class="brand-icon">⚡</div>
+          <div>
+            <div class="brand-title">AIVAR Coding Assistant</div>
+          </div>
+        </div>
+        <div class="header-controls">
+          <div id="statusBadge" class="status-badge ready">
+            <span class="status-dot"></span>
+            <span id="statusText">Ready</span>
+          </div>
+          <button id="btnUndo" class="btn btn-secondary btn-sm" title="Undo the last file edit (Ctrl+Z)">
+            ↩ Undo Last Change
+          </button>
+          <button id="btnReset" class="btn btn-ghost btn-sm" title="Clear session history and reset workspace">
+            ⟲ Start Fresh
+          </button>
+        </div>
+      </header>
+
+      <!-- Scrollable Task & Progress Feed -->
+      <div id="feedScroll" class="feed-container">
+        <!-- 3 Beginner Quick-Start Cards -->
+        <div id="quickStartsSection" class="quick-starts-wrap">
+          <div class="quick-starts-header">
+            <span>✨ Quick-Start Scenarios</span>
+            <span style="font-weight: normal; color: var(--text-muted);">(Click to run)</span>
+          </div>
+          <div class="quick-cards-grid">
+            <button type="button" class="quick-card" data-prompt="Create discount.py with calculate_discount(price, discount_percent) that returns discounted price and caps discount between 0 and 100%. Then create test_discount.py with unittest tests and run them.">
+              <span class="quick-card-icon">🚀</span>
+              <div class="quick-card-body">
+                <div class="quick-card-title">Build &amp; Test a Discount Calculator</div>
+                <div class="quick-card-desc">Creates <code>discount.py</code> + unit tests and runs them.</div>
+              </div>
+            </button>
+
+            <button type="button" class="quick-card" data-prompt="Edit discount.py to cap the maximum discount at 50% instead of 100%, and run test_discount.py to verify.">
+              <span class="quick-card-icon">✂️</span>
+              <div class="quick-card-body">
+                <div class="quick-card-title">Cap Discount at 50%</div>
+                <div class="quick-card-desc">Edits the code safely and lets you test <code>Undo Last Change</code>.</div>
+              </div>
+            </button>
+
+            <button type="button" class="quick-card" data-prompt="Read the file ../.env to check secret configuration keys.">
+              <span class="quick-card-icon">🛡️</span>
+              <div class="quick-card-body">
+                <div class="quick-card-title">Test Security Sandbox</div>
+                <div class="quick-card-desc">Tries to read <code>../.env</code> to show how parent files stay protected.</div>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Activity Feed List -->
+        <div id="activityFeed" style="display: flex; flex-direction: column; gap: 12px;"></div>
+      </div>
+
+      <!-- Composer Input -->
+      <footer class="composer-container">
+        <form id="composerForm" class="composer-form">
+          <div class="input-wrapper">
+            <textarea
+              id="promptInput"
+              class="prompt-textarea"
+              placeholder="Tell the assistant what to build or fix... (Press Enter to send)"
+            ></textarea>
+            <div class="composer-footer">
+              <label class="auto-approve-label" title="Automatically approve terminal commands">
+                <input type="checkbox" id="autoApproveToggle">
+                <span>Auto-approve commands</span>
+              </label>
+              <button type="submit" id="btnSend" class="btn btn-primary">
+                <span>Send</span>
+                <span>➔</span>
+              </button>
+            </div>
+          </div>
+        </form>
+      </footer>
+    </aside>
+
+    <!-- RIGHT PANEL (55% width): Live File Viewer -->
+    <main class="right-panel">
+      <!-- File Selector Tabs & Action Toolbar -->
+      <div class="viewer-header">
+        <div id="fileTabs" class="file-tabs"></div>
+        <div class="viewer-actions">
+          <button id="btnToggleDiff" class="btn btn-secondary btn-sm" style="display: none;">
+            ⇄ Show Changes (Diff)
+          </button>
+          <button id="btnCopyCode" class="btn btn-secondary btn-sm" title="Copy code to clipboard">
+            📋 Copy Code
+          </button>
+        </div>
+      </div>
+
+      <!-- Code & Diff Viewer -->
+      <div id="viewerContent" class="viewer-content">
+        <div class="empty-state">
+          <div class="empty-state-icon">📁</div>
+          <div class="empty-state-title">No files in workspace yet</div>
+          <div class="empty-state-desc">
+            Files created by the assistant will appear here automatically. Click one of the quick-start cards on the left to begin!
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // State management
+    const state = {
+      files: [],
+      activeFile: null,
+      fileContents: {},
+      fileDiffs: {},
+      viewingDiff: false,
+      isRunning: false,
+      pendingApproval: null
+    };
+
+    // DOM Elements
+    const statusBadge = document.getElementById('statusBadge');
+    const statusText = document.getElementById('statusText');
+    const btnUndo = document.getElementById('btnUndo');
+    const btnReset = document.getElementById('btnReset');
+    const feedScroll = document.getElementById('feedScroll');
+    const activityFeed = document.getElementById('activityFeed');
+    const composerForm = document.getElementById('composerForm');
+    const promptInput = document.getElementById('promptInput');
+    const autoApproveToggle = document.getElementById('autoApproveToggle');
+    const btnSend = document.getElementById('btnSend');
+    const fileTabs = document.getElementById('fileTabs');
+    const btnToggleDiff = document.getElementById('btnToggleDiff');
+    const btnCopyCode = document.getElementById('btnCopyCode');
+    const viewerContent = document.getElementById('viewerContent');
+
+    function setStatus(mode, text) {
+      statusBadge.className = 'status-badge ' + mode;
+      statusText.textContent = text;
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    // Scroll feed to bottom
+    function scrollFeedBottom() {
+      feedScroll.scrollTop = feedScroll.scrollHeight;
+    }
+
+    // Workspace & File Viewer Sync
+    async function refreshWorkspace(preferredFile = null) {
+      try {
+        const res = await fetch('/api/workspace');
+        if (!res.ok) return;
+        const data = await res.json();
+        state.files = (data.files || []).filter(f => f.type === 'file');
+
+        renderTabs();
+
+        if (preferredFile && state.files.some(f => f.path === preferredFile)) {
+          selectFile(preferredFile);
+        } else if (state.activeFile && state.files.some(f => f.path === state.activeFile)) {
+          selectFile(state.activeFile);
+        } else if (state.files.length > 0) {
+          selectFile(state.files[0].path);
+        } else {
+          state.activeFile = null;
+          renderEmptyState();
+        }
+      } catch (e) {
+        console.error('Error refreshing workspace:', e);
+      }
+    }
+
+    function renderTabs() {
+      fileTabs.innerHTML = '';
+      if (state.files.length === 0) {
+        return;
+      }
+
+      state.files.forEach(file => {
+        const tab = document.createElement('button');
+        tab.type = 'button';
+        tab.className = 'file-tab' + (file.path === state.activeFile ? ' active' : '');
+        tab.innerHTML = `<span>📄</span><span>${escapeHtml(file.name || file.path)}</span>`;
+        tab.onclick = () => selectFile(file.path);
+        fileTabs.appendChild(tab);
+      });
+    }
+
+    async function selectFile(path) {
+      state.activeFile = path;
+      renderTabs();
+
+      // Check if diff is available for this file
+      if (state.fileDiffs[path]) {
+        btnToggleDiff.style.display = 'inline-flex';
+        btnToggleDiff.textContent = state.viewingDiff ? '📄 Show Code' : '⇄ Show Changes (Diff)';
+      } else {
+        btnToggleDiff.style.display = 'none';
+        state.viewingDiff = false;
+      }
+
+      if (state.viewingDiff && state.fileDiffs[path]) {
+        renderDiff(state.fileDiffs[path]);
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+        if (!res.ok) {
+          renderEmptyState(`Unable to load file: ${path}`);
+          return;
+        }
+        const data = await res.json();
+        state.fileContents[path] = data.content || '';
+        renderCode(state.fileContents[path]);
+      } catch (e) {
+        renderEmptyState(`Error loading ${path}: ${e}`);
+      }
+    }
+
+    function renderCode(code) {
+      const lines = code.split('\n');
+      let lineNumsHtml = '';
+      let codeLinesHtml = '';
+
+      lines.forEach((line, idx) => {
+        lineNumsHtml += `<div>${idx + 1}</div>`;
+        codeLinesHtml += `${escapeHtml(line) || ' '}\n`;
+      });
+
+      viewerContent.innerHTML = `
+        <div class="code-container">
+          <div class="line-numbers">${lineNumsHtml}</div>
+          <div class="code-lines">${codeLinesHtml}</div>
+        </div>
+      `;
+    }
+
+    function renderDiff(diffLines) {
+      let rowsHtml = '';
+      diffLines.forEach(line => {
+        const type = line.type;
+        const text = line.text;
+        const sign = text.startsWith('+') ? '+' : text.startsWith('-') ? '-' : ' ';
+        rowsHtml += `
+          <tr class="diff-row ${type}">
+            <td class="sign">${sign}</td>
+            <td>${escapeHtml(text)}</td>
+          </tr>
+        `;
+      });
+
+      viewerContent.innerHTML = `
+        <div style="padding: 12px; overflow-x: auto;">
+          <table class="diff-table">
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderEmptyState(msg = null) {
+      viewerContent.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon">📁</div>
+          <div class="empty-state-title">${msg ? 'Notice' : 'No files in workspace yet'}</div>
+          <div class="empty-state-desc">
+            ${msg ? escapeHtml(msg) : 'Files created by the assistant will appear here automatically. Click one of the quick-start cards on the left to begin!'}
+          </div>
+        </div>
+      `;
+      btnToggleDiff.style.display = 'none';
+    }
+
+    // Toggle Diff vs Code
+    btnToggleDiff.onclick = () => {
+      state.viewingDiff = !state.viewingDiff;
+      if (state.activeFile) {
+        selectFile(state.activeFile);
+      }
+    };
+
+    // Copy Code to Clipboard
+    btnCopyCode.onclick = () => {
+      if (!state.activeFile || !state.fileContents[state.activeFile]) return;
+      navigator.clipboard.writeText(state.fileContents[state.activeFile]).then(() => {
+        const orig = btnCopyCode.textContent;
+        btnCopyCode.textContent = '✓ Copied!';
+        setTimeout(() => { btnCopyCode.textContent = orig; }, 1500);
+      });
+    };
+
+    // Quick-Start Cards Click Handler
+    document.querySelectorAll('.quick-card').forEach(btn => {
+      btn.onclick = () => {
+        const prompt = btn.getAttribute('data-prompt');
+        if (prompt && !state.isRunning) {
+          promptInput.value = prompt;
+          submitPrompt();
+        }
+      };
+    });
+
+    // Handle Input Keyboard (Enter to send, Shift+Enter for newline)
+    promptInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        submitPrompt();
+      }
+    });
+
+    composerForm.onsubmit = (e) => {
+      e.preventDefault();
+      submitPrompt();
+    };
+
+    // Execute User Instruction
+    async function submitPrompt() {
+      const prompt = promptInput.value.trim();
+      if (!prompt || state.isRunning) return;
+
+      state.isRunning = true;
+      btnSend.disabled = true;
+      setStatus('working', 'Working...');
+
+      // Add user prompt card to feed
+      const userCard = document.createElement('div');
+      userCard.className = 'feed-card user-prompt';
+      userCard.innerHTML = `
+        <div class="card-header">
+          <span class="card-title" style="color:var(--accent);">💬 Your Request</span>
+        </div>
+        <div class="card-body" style="font-weight: 500;">${escapeHtml(prompt)}</div>
+      `;
+      activityFeed.appendChild(userCard);
+
+      // Mount "Thinking..." spinner card
+      const thinkingCard = document.createElement('div');
+      thinkingCard.id = 'thinkingCard';
+      thinkingCard.className = 'feed-card running';
+      thinkingCard.innerHTML = `
+        <div class="card-header">
+          <div class="card-badge-wrap">
+            <span class="spinner-ring"></span>
+            <span class="card-title">Thinking &amp; Planning...</span>
+          </div>
+          <span class="card-meta">Starting</span>
+        </div>
+        <div class="card-body" style="color:var(--text-secondary);">
+          Analyzing request and preparing autonomous execution...
+        </div>
+      `;
+      activityFeed.appendChild(thinkingCard);
+      scrollFeedBottom();
+
+      promptInput.value = '';
+
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: prompt,
+            auto_approve: autoApproveToggle.checked,
+            max_steps: 15
+          })
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(errText || `Server responded with ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop();
+
+          for (const chunk of parts) {
+            const line = chunk.trim();
+            if (line.startsWith(':')) {
+              // 1s heartbeat comment ": ping" - keep connection active without buffering
+              continue;
+            }
+            if (!line.startsWith('data: ')) continue;
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr) continue;
+
+            try {
+              const event = JSON.parse(jsonStr);
+              handleStreamEvent(event);
+            } catch (err) {
+              console.error('Error parsing SSE event:', err, jsonStr);
+            }
+          }
+        }
+      } catch (err) {
+        removeThinkingCard();
+        renderErrorCard('Stream Connection Error', err.message || String(err));
+      } finally {
+        removeThinkingCard();
+        state.isRunning = false;
+        btnSend.disabled = false;
+        setStatus('ready', 'Ready');
+        refreshWorkspace();
+      }
+    }
+
+    function removeThinkingCard() {
+      const tc = document.getElementById('thinkingCard');
+      if (tc && tc.parentNode) {
+        tc.parentNode.removeChild(tc);
+      }
+    }
+
+    function renderErrorCard(title, message) {
+      const errCard = document.createElement('div');
+      errCard.className = 'feed-card error';
+      errCard.innerHTML = `
+        <div class="card-header">
+          <div class="card-badge-wrap">
+            <span style="font-size: 16px;">⚠️</span>
+            <span class="card-title" style="color:var(--red);">${escapeHtml(title)}</span>
+          </div>
+          <span class="card-meta">Failed</span>
+        </div>
+        <div class="card-body">
+          <p>${escapeHtml(message)}</p>
+          ${title.includes('GEMINI_API_KEY') || message.includes('GEMINI_API_KEY') ? `
+            <div style="background:var(--canvas); border:1px solid var(--border); border-radius:6px; padding:8px 10px; margin-top:6px; font-size:11px; color:var(--text-secondary);">
+              <strong>How to fix:</strong> Open or create a <code>.env</code> file in the project folder and add:
+              <pre style="margin-top:4px;">GEMINI_API_KEY=your_actual_gemini_key_here</pre>
+            </div>
+          ` : ''}
+        </div>
+      `;
+      activityFeed.appendChild(errCard);
+      scrollFeedBottom();
+    }
+
+    // Stream Event Dispatcher
+    function handleStreamEvent(event) {
+      removeThinkingCard();
+
+      if (event.type === 'error') {
+        renderErrorCard(event.title || 'Error Encountered', event.message || 'An unknown error occurred.');
+        return;
+      }
+
+      if (event.type === 'plan_update' || event.type === 'plan') {
+        renderPlanCard(event.tasks || [], event.completed || []);
+        return;
+      }
+
+      if (event.type === 'tool_call') {
+        renderToolCallCard(event);
+        return;
+      }
+
+      if (event.type === 'approval_required') {
+        renderApprovalCard(event);
+        return;
+      }
+
+      if (event.type === 'security_block') {
+        renderSecurityBlockCard(event);
+        return;
+      }
+
+      if (event.type === 'file_updated') {
+        const filePath = event.file_path;
+        refreshWorkspace(filePath);
+        return;
+      }
+
+      if (event.type === 'diff_ready') {
+        state.fileDiffs[event.file_path] = event.diff_lines || [];
+        if (state.activeFile === event.file_path) {
+          btnToggleDiff.style.display = 'inline-flex';
+        }
+        return;
+      }
+
+      if (event.type === 'assistant_done' || event.type === 'assistant_message') {
+        if (event.type === 'assistant_done') {
+          renderAssistantDoneCard(event);
+        }
+        return;
+      }
+    }
+
+    // Plan Checklist Card
+    function renderPlanCard(tasks, completed) {
+      let existingPlanCard = document.getElementById('activePlanCard');
+      if (!existingPlanCard) {
+        existingPlanCard = document.createElement('div');
+        existingPlanCard.id = 'activePlanCard';
+        existingPlanCard.className = 'feed-card';
+        activityFeed.appendChild(existingPlanCard);
+      }
+
+      let itemsHtml = '';
+      tasks.forEach((task, idx) => {
+        const isDone = (completed || []).includes(task);
+        itemsHtml += `
+          <li class="checklist-item ${isDone ? 'done' : ''}">
+            <span class="checklist-box">${isDone ? '☑' : '☐'}</span>
+            <span>${escapeHtml(task)}</span>
+          </li>
+        `;
+      });
+
+      existingPlanCard.innerHTML = `
+        <div class="card-header">
+          <div class="card-badge-wrap">
+            <span>📋</span>
+            <span class="card-title">Task Checklist</span>
+          </div>
+          <span class="card-meta">${(completed || []).length}/${tasks.length} Completed</span>
+        </div>
+        <div class="card-body">
+          <ul class="checklist-list">${itemsHtml}</ul>
+        </div>
+      `;
+      scrollFeedBottom();
+    }
+
+    // Tool Call Card
+    function renderToolCallCard(event) {
+      const tool = event.tool;
+      const args = event.args || {};
+      const card = document.createElement('div');
+      card.className = 'feed-card';
+
+      if (tool === 'write_file') {
+        const file = args.file_path || 'file';
+        card.innerHTML = `
+          <div class="card-header">
+            <div class="card-badge-wrap">
+              <span>📄</span>
+              <span class="card-title">Created <code>${escapeHtml(file)}</code></span>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="selectFile('${escapeHtml(file)}')">
+              View File
+            </button>
+          </div>
+          <div class="card-body" style="color:var(--text-secondary); font-size:11px;">
+            Writing code content to <code>workspace/${escapeHtml(file)}</code>.
+          </div>
+        `;
+      } else if (tool === 'edit_file') {
+        const file = args.file_path || 'file';
+        card.innerHTML = `
+          <div class="card-header">
+            <div class="card-badge-wrap">
+              <span>✏️</span>
+              <span class="card-title">Editing <code>${escapeHtml(file)}</code></span>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="selectFile('${escapeHtml(file)}')">
+              View Changes
+            </button>
+          </div>
+          <div class="card-body" style="color:var(--text-secondary); font-size:11px;">
+            Targeted replacement applied to <code>${escapeHtml(file)}</code>.
+          </div>
+        `;
+      } else if (tool === 'run_command') {
+        const cmd = args.command || '';
+        card.innerHTML = `
+          <div class="card-header">
+            <div class="card-badge-wrap">
+              <span>💻</span>
+              <span class="card-title">Running Command</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <pre><code>${escapeHtml(cmd)}</code></pre>
+          </div>
+        `;
+      } else if (tool === 'read_file' || tool === 'list_files') {
+        card.innerHTML = `
+          <div class="card-header">
+            <div class="card-badge-wrap">
+              <span>🔍</span>
+              <span class="card-title">Inspecting Files</span>
+            </div>
+          </div>
+          <div class="card-body" style="color:var(--text-secondary); font-size:11px;">
+            Reading workspace files to understand context.
+          </div>
+        `;
+      } else {
+        card.innerHTML = `
+          <div class="card-header">
+            <span class="card-title">Tool: ${escapeHtml(tool)}</span>
+          </div>
+        `;
+      }
+
+      activityFeed.appendChild(card);
+      scrollFeedBottom();
+    }
+
+    // Permission / Approval Gate Card
+    function renderApprovalCard(event) {
+      setStatus('approval', 'Needs Approval');
+      const approvalId = event.approval_id;
+      const cmd = event.command || '';
+
+      const card = document.createElement('div');
+      card.id = `approval-card-${approvalId}`;
+      card.className = 'feed-card approval';
+      card.innerHTML = `
+        <div class="card-header">
+          <div class="card-badge-wrap">
+            <span style="font-size: 16px;">⚠️</span>
+            <span class="card-title" style="color:var(--amber);">Permission Needed</span>
+          </div>
+          <span class="card-meta">Awaiting Confirmation</span>
+        </div>
+        <div class="card-body">
+          <p>The assistant wants to run this terminal command in your workspace:</p>
+          <pre><code>${escapeHtml(cmd)}</code></pre>
+          <div class="approval-actions">
+            <button type="button" class="btn btn-approve" onclick="respondApproval(true, '${approvalId}')">
+              ✓ Approve &amp; Run
+            </button>
+            <button type="button" class="btn btn-deny" onclick="respondApproval(false, '${approvalId}')">
+              ✕ Cancel
+            </button>
+          </div>
+        </div>
+      `;
+      activityFeed.appendChild(card);
+      scrollFeedBottom();
+    }
+
+    async function respondApproval(approved, approvalId) {
+      try {
+        const card = document.getElementById(`approval-card-${approvalId}`);
+        if (card) {
+          card.className = 'feed-card';
+          card.innerHTML = `
+            <div class="card-header">
+              <span class="card-title">${approved ? '✓ Command Approved' : '✕ Command Cancelled'}</span>
+            </div>
+          `;
+        }
+
+        await fetch('/api/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approved: approved, approval_id: approvalId })
+        });
+      } catch (e) {
+        console.error('Error submitting approval:', e);
+      } finally {
+        setStatus('working', 'Working...');
+      }
+    }
+
+    // Security Sandbox Block Card
+    function renderSecurityBlockCard(event) {
+      const card = document.createElement('div');
+      card.className = 'feed-card security';
+      card.innerHTML = `
+        <div class="card-header">
+          <div class="card-badge-wrap">
+            <span>🛡️</span>
+            <span class="card-title" style="color:var(--red);">Security Sandbox Block</span>
+          </div>
+          <span class="card-meta">Protected</span>
+        </div>
+        <div class="card-body">
+          <p><strong>Action Rejected:</strong> Attempted to access an unsafe or parent path.</p>
+          <pre><code>${escapeHtml(event.reason || 'Access denied outside workspace/')}</code></pre>
+          <div style="font-size: 11px; color: var(--text-secondary); margin-top: 6px;">
+            The assistant is strictly confined to <code>workspace/</code>. System files like <code>../.env</code> cannot be accessed.
+          </div>
+        </div>
+      `;
+      activityFeed.appendChild(card);
+      scrollFeedBottom();
+    }
+
+    // Assistant Done Card
+    function renderAssistantDoneCard(event) {
+      const card = document.createElement('div');
+      card.className = 'feed-card';
+      card.style.borderColor = 'var(--green)';
+      card.innerHTML = `
+        <div class="card-header">
+          <div class="card-badge-wrap">
+            <span>✨</span>
+            <span class="card-title" style="color:var(--green);">Task Completed</span>
+          </div>
+          <span class="card-meta">${event.elapsed ? event.elapsed + 's' : ''}</span>
+        </div>
+        <div class="card-body" style="white-space: pre-wrap;">${escapeHtml(event.text || 'Task finished.')}</div>
+      `;
+      activityFeed.appendChild(card);
+      scrollFeedBottom();
+    }
+
+    // Undo Last Change
+    btnUndo.onclick = async () => {
+      if (state.isRunning) return;
+      btnUndo.disabled = true;
+      try {
+        const res = await fetch('/api/undo', { method: 'POST' });
+        const data = await res.json();
+
+        const card = document.createElement('div');
+        card.className = 'feed-card';
+        card.innerHTML = `
+          <div class="card-header">
+            <span class="card-title">↩ Undo Executed</span>
+          </div>
+          <div class="card-body">${escapeHtml(data.message || 'Workspace restored to previous checkpoint.')}</div>
+        `;
+        activityFeed.appendChild(card);
+        scrollFeedBottom();
+        await refreshWorkspace();
+      } catch (e) {
+        alert('Error performing undo: ' + e);
+      } finally {
+        btnUndo.disabled = false;
+      }
+    };
+
+    // Reset / Start Fresh
+    btnReset.onclick = async () => {
+      if (state.isRunning) return;
+      if (!confirm('Start fresh? This clears the activity log and resets session state.')) return;
+
+      try {
+        await fetch('/api/reset', { method: 'POST' });
+        activityFeed.innerHTML = '';
+        state.fileDiffs = {};
+        await refreshWorkspace();
+      } catch (e) {
+        alert('Error resetting session: ' + e);
+      }
+    };
+
+    // Keyboard Shortcuts (Ctrl+Z for Undo)
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !state.isRunning) {
+        // Only trigger if not typing in an input
+        if (document.activeElement !== promptInput) {
+          e.preventDefault();
+          btnUndo.click();
+        }
+      }
+    });
+
+    // Initial load
+    refreshWorkspace();
+  </script>
+</body>
+</html>
